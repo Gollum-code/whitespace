@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { db } from './db'
 import { go, parseRoute } from './lib/nav'
-import { isDue } from './lib/srs'
+import { isDue, refreshScheduler } from './lib/srs'
+import { exportMarksCsv } from './lib/exporter'
 import { LibraryPage } from './pages/LibraryPage'
 import { ImportPage } from './pages/ImportPage'
 import { MaterialPage } from './pages/MaterialPage'
@@ -99,6 +100,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [appKey, setAppKey] = useState(() => readSetting('whitespace:appKey', ''))
   const [speechRate, setSpeechRate] = useState(() => readSetting('whitespace:speechRate', '0.95'))
   const [limit, setLimit] = useState(() => readSetting('whitespace:newLimit', '20'))
+  const [retention, setRetention] = useState(() => readSetting('whitespace:retention', '0.9'))
   const [mode, setMode] = useState<'merge' | 'replace'>('merge')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -111,6 +113,9 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     localStorage.setItem('whitespace:speechRate', String(Number.isFinite(r) && r > 0 ? r : 0.95))
     const n = Math.max(0, Math.floor(Number(limit) || 0))
     localStorage.setItem('whitespace:newLimit', String(n))
+    const ret = Number(retention)
+    localStorage.setItem('whitespace:retention', String(Number.isFinite(ret) ? ret : 0.9))
+    refreshScheduler()
     onClose()
   }
 
@@ -191,6 +196,15 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setLimit(e.target.value)}
             />
           </label>
+          <label className="field">
+            <span>目标记忆率</span>
+            <select value={retention} onChange={(e) => setRetention(e.target.value)}>
+              <option value="0.8">80% · 间隔更短</option>
+              <option value="0.85">85%</option>
+              <option value="0.9">90% · 默认</option>
+              <option value="0.95">95% · 复习更勤</option>
+            </select>
+          </label>
         </div>
 
         <div className="row">
@@ -228,6 +242,24 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               e.target.value = ''
             }}
           />
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              setMsg('')
+              try {
+                const n = await exportMarksCsv()
+                setMsg(`已导出 ${n} 个标记到 CSV。`)
+              } catch (e) {
+                setMsg(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            ⬇ 导出 CSV
+          </button>
         </div>
         {msg && <p className="backup-msg small">{msg}</p>}
 

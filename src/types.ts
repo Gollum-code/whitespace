@@ -45,6 +45,8 @@ export interface Mark {
   endSec?: number
   createdAt: number
   card: CardRec
+  /** 用户笔记，比如搭配、易错点、个人例句。 */
+  note?: string
 }
 
 /**

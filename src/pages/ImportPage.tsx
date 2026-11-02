@@ -54,6 +54,28 @@ export function ImportPage() {
     }
   }
 
+  /** 用 oEmbed 自动填 YouTube 标题（走抓取代理，避免 CORS）。 */
+  const fillYtTitle = async () => {
+    setError('')
+    const id = youtubeId(ytUrl)
+    if (!id) return setError('先填一个有效的 YouTube 链接')
+    setBusy(true)
+    try {
+      const watch = `https://www.youtube.com/watch?v=${id}`
+      const oembed = `https://noembed.com/embed?url=${encodeURIComponent(watch)}`
+      const res = await fetch(`/api/fetch?url=${encodeURIComponent(oembed)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `获取失败（HTTP ${res.status}）`)
+      const meta = JSON.parse(String(data.html || '{}'))
+      if (!meta.title) throw new Error('没拿到标题，手动填一下吧')
+      setYtTitle(String(meta.title))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const ytCues = useMemo(() => (subRaw.trim() ? mergeCues(parseSubtitle(subRaw)) : []), [subRaw])
   const artCues = useMemo(() => (artText.trim() ? splitSentences(artText) : []), [artText])
   const localCues = useMemo(
@@ -161,7 +183,12 @@ export function ImportPage() {
             />
           </label>
           <label className="field">
-            <span>标题（可选）</span>
+            <span>
+              标题（可选）
+              <button className="link small" onClick={fillYtTitle} disabled={!ytUrl || busy}>
+                {busy ? '获取中…' : '自动填标题'}
+              </button>
+            </span>
             <input value={ytTitle} onChange={(e) => setYtTitle(e.target.value)} placeholder="比如：How I learned English" />
           </label>
 

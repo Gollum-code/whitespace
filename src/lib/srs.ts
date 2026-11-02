@@ -1,12 +1,28 @@
 import { fsrs, generatorParameters, createEmptyCard, Rating, type Card, type Grade } from 'ts-fsrs'
 import type { CardRec, RatingName } from '../types'
 
-const scheduler = fsrs(
-  generatorParameters({
-    enable_fuzz: true,
-    enable_short_term: true,
-  }),
-)
+/** 目标记忆率：可设置，默认 0.9（Anki 常规）。改完调用 refreshScheduler 生效。 */
+function retention(): number {
+  const raw = Number(localStorage.getItem('whitespace:retention') ?? '')
+  return Number.isFinite(raw) && raw >= 0.7 && raw <= 0.99 ? raw : 0.9
+}
+
+function makeScheduler() {
+  return fsrs(
+    generatorParameters({
+      enable_fuzz: true,
+      enable_short_term: true,
+      request_retention: retention(),
+    }),
+  )
+}
+
+let scheduler = makeScheduler()
+
+/** 设置页改了目标记忆率后调用，重建调度器。 */
+export function refreshScheduler() {
+  scheduler = makeScheduler()
+}
 
 const RATING: Record<RatingName, Grade> = {
   again: Rating.Again,

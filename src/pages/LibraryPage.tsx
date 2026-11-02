@@ -3,7 +3,7 @@ import { db } from '../db'
 import { go } from '../lib/nav'
 import { isDue, isMastered } from '../lib/srs'
 import { createSampleMaterial } from '../lib/sample'
-import type { Mark, Material } from '../types'
+import type { Mark, Material, MaterialKind } from '../types'
 
 const KIND_LABEL: Record<Material['kind'], string> = {
   youtube: 'YouTube',
@@ -15,6 +15,8 @@ export function LibraryPage() {
   const [materials, setMaterials] = useState<Material[]>([])
   const [marks, setMarks] = useState<Mark[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [q, setQ] = useState('')
+  const [kind, setKind] = useState<'all' | MaterialKind>('all')
 
   useEffect(() => {
     let alive = true
@@ -35,6 +37,11 @@ export function LibraryPage() {
   const mastered = marks.filter((m) => isMastered(m.card)).length
   const byMaterial = new Map<string, number>()
   for (const m of marks) byMaterial.set(m.materialId, (byMaterial.get(m.materialId) ?? 0) + 1)
+
+  const needle = q.trim().toLowerCase()
+  const filtered = materials.filter(
+    (m) => (kind === 'all' || m.kind === kind) && (!needle || m.title.toLowerCase().includes(needle)),
+  )
 
   return (
     <div className="page">
@@ -78,6 +85,22 @@ export function LibraryPage() {
         </div>
       )}
 
+      <div className="toolbar">
+        <input
+          className="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜索素材…"
+        />
+        <div className="seg">
+          {(['all', 'youtube', 'article', 'local'] as const).map((k) => (
+            <button key={k} className={kind === k ? 'seg-btn active' : 'seg-btn'} onClick={() => setKind(k)}>
+              {k === 'all' ? '全部' : KIND_LABEL[k]}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loaded && materials.length === 0 && (
         <div className="empty">
           <h2>还没有素材</h2>
@@ -99,8 +122,15 @@ export function LibraryPage() {
         </div>
       )}
 
+      {loaded && materials.length > 0 && filtered.length === 0 && (
+        <div className="empty">
+          <h2>没有匹配的素材</h2>
+          <p className="muted">换个关键词或清除筛选。</p>
+        </div>
+      )}
+
       <div className="cards">
-        {materials.map((m) => {
+        {filtered.map((m) => {
           const n = byMaterial.get(m.id) ?? 0
           return (
             <button key={m.id} className="card material" onClick={() => go(`/m/${m.id}`)}>

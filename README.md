@@ -45,6 +45,8 @@ yt-dlp --write-auto-subs --sub-langs "en.*" --skip-download \
        --write-subs --convert-subs srt "https://www.youtube.com/watch?v=xxxx"
 ```
 
+标题可以在导入页点「自动填标题」，走 oEmbed 代理获取。字幕也可以直接填一个 `.srt/.vtt` 链接让代理抓取，省去下载再上传。
+
 把生成的 `.srt` 拖进导入页（或打开复制全文粘贴），保存后会自动用 YouTube 播放器播放，
 点句子跳转、点单词标记。
 
@@ -91,6 +93,14 @@ YouTube 和本地两种导入方式都支持直接填一个 `.srt/.vtt` 的 URL�
 
 **每日新词上限：** 默认 20 个/天（设置里可改），新词过了上限顺延到明天，避免一次堆 200 个。
 
+**目标记忆率：** 设置里可选 80%–95%，默认 90%。调高会更频繁复习、记得更牢；调低则间隔更长。这是 FSRS 的核心参数。
+
+**标记与笔记：**
+
+- 点单个词标记单词；**选中 2–6 个词**会标记为短语（高亮它的组成词）。
+- 每个标记都能写笔记（搭配、易错点、个人例句），复习看答案时会显示。
+- 素材页可以重命名标题，素材库支持关键词搜索和按类型筛选。
+
 AI 生成的题目会缓存在本地（key = 词 + 原句 + prompt 版本），第二次打开秒开。
 
 ---
@@ -110,8 +120,17 @@ AI 生成的题目会缓存在本地（key = 词 + 原句 + prompt 版本），�
 
 - **导出备份**：下载一个 JSON（素材、标记、复习记录、题目缓存、查词缓存）
 - **导入备份**：合并或覆盖导入；覆盖前会二次确认
+- **导出 CSV**：把所有标记导出成 CSV（Excel / Anki 都能导入），带 BOM 避免中文乱码
 
 换设备或定期清理前导出一次即可。
+
+---
+
+## 安装为应用（PWA）
+
+「留白」是纯前端 + 本地数据，装成应用后可以离线打开（首次在线访问后，外壳和资源会被缓存，AI 出题走兜底）。
+
+浏览器地址栏右侧点「安装」，或 Chrome 菜单 → 安装 留白。之后从桌面/开始菜单打开就是一个独立窗口。
 
 ---
 
@@ -153,8 +172,10 @@ npx wrangler pages deploy dist --project-name whitespace
 
 - [ ] 字幕目前要手动抓（可加一个本地 `yt-dlp` 小工具或浏览器扩展）
 - [ ] 没有云同步，换设备要重新导入（先靠「导出/导入备份」过渡）
+- [ ] 只支持文本类素材，PDF / EPUB / 播客还没接
 - [ ] 长文章断句对缩写、引号的处理是启发式的
 - [ ] 词形还原是规则表，个别不规则词可能归并不准
+- [ ] 还没有自动化测试和 CI
 
 ---
 
@@ -163,19 +184,21 @@ npx wrangler pages deploy dist --project-name whitespace
 ```
 src/
   db.ts              IndexedDB 封装（materials / marks / drills / meta / reviews / lookups）
-  types.ts           数据模型（含三种题型 + 复习流水）
+  types.ts           数据模型（三种题型 + 复习流水 + 笔记）
   lib/
     text.ts          字幕解析、断句、分词、词形还原
-    srs.ts           ts-fsrs 封装（评分、下次间隔预览）
+    srs.ts           ts-fsrs 封装（评分、间隔预览、目标记忆率）
     ai.ts            AI 出题 + 查词缓存 + 兜底 + 并发池 + 去重
     drills.ts        题型轮换、连词成句、选词干扰项
     speech.ts        浏览器原生 TTS（朗读 / 挖空停顿）
     article.ts       Readability 抽正文、URL / YouTube ID 解析
+    exporter.ts      标记导出 CSV
     media.ts         本地视频的临时 Blob 管理
     nav.ts           hash 路由
     sample.ts        内置示例素材
-  components/        句子渲染、播放器、🔊、查词气泡、三种题型卡片
+  components/        句子渲染、播放器、🔊、查词气泡、笔记、三种题型卡片
   pages/             素材库、导入、素材详情、复习、按词复习、单词本、统计
+public/              PWA（manifest / sw / 图标）
 worker/handler.js    共享的代理逻辑（/api/llm、/api/fetch）
 functions/api/       Cloudflare Pages Functions 入口
 ```

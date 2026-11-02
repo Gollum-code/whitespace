@@ -387,6 +387,7 @@ export function ReviewPage() {
         )}
 
         {revealed && drill?.hintZh && <p className="muted small">提示：{drill.hintZh}</p>}
+        {revealed && current?.note && <p className="muted small">我的笔记：{current.note}</p>}
 
         {!locked && (
           <button className="link small" onClick={() => setRevealed(true)}>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { db } from '../db'
 import { LocalVideoPlayer } from '../components/LocalVideoPlayer'
 import { LookupPopover, type PopoverState } from '../components/LookupPopover'
+import { NoteEditor } from '../components/NoteEditor'
 import { Sentence } from '../components/Sentence'
 import { SpeakerButton } from '../components/SpeakerButton'
 import { YouTubePlayer } from '../components/YouTubePlayer'
@@ -18,6 +19,8 @@ export function MaterialPage({ id }: { id: string }) {
   const [toast, setToast] = useState('')
   const [lookupMode, setLookupMode] = useState(false)
   const [pop, setPop] = useState<PopoverState | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -101,6 +104,56 @@ export function MaterialPage({ id }: { id: string }) {
     setToast(`已标记「${word}」· 加入今日复习`)
   }
 
+  const togglePhrase = async (cue: Cue, phrase: string) => {
+    const norm = phrase.replace(/\s+/g, ' ').trim()
+    if (!norm) return
+    const existing = marks.find(
+      (m) => m.cueIndex === cue.index && m.text.toLowerCase() === norm.toLowerCase(),
+    )
+    if (existing) {
+      await db.delMark(existing.id)
+      setMarks((prev) => prev.filter((m) => m.id !== existing.id))
+      setToast(`已取消短语「${norm}」`)
+      return
+    }
+    const mark: Mark = {
+      id: crypto.randomUUID(),
+      materialId: material.id,
+      cueIndex: cue.index,
+      kind: 'phrase',
+      text: norm,
+      lemma: norm.toLowerCase(),
+      startSec: cue.startSec,
+      endSec: cue.endSec,
+      createdAt: Date.now(),
+      card: newCard(),
+    }
+    await db.putMark(mark)
+    setMarks((prev) => [...prev, mark])
+    setToast(`已标记短语「${norm}」`)
+  }
+
+  const saveNote = async (mark: Mark, note: string) => {
+    const updated: Mark = { ...mark, note: note || undefined }
+    await db.putMark(updated)
+    setMarks((prev) => prev.map((m) => (m.id === mark.id ? updated : m)))
+  }
+
+  const startRename = () => {
+    setTitleDraft(material.title)
+    setEditingTitle(true)
+  }
+
+  const saveTitle = async () => {
+    const t = titleDraft.trim()
+    setEditingTitle(false)
+    if (!t || t === material.title) return
+    const updated: Material = { ...material, title: t }
+    await db.putMaterial(updated)
+    setMaterial(updated)
+    setToast('标题已更新')
+  }
+
   const onWord = (cue: Cue) => (word: string, e: React.MouseEvent) => {
     if (lookupMode) {
       setPop({
@@ -137,7 +190,34 @@ export function MaterialPage({ id }: { id: string }) {
           ← 素材库
         </button>
         <div className="material-title">
-          <h1>{material.title}</h1>
+          {editingTitle ? (
+            <div className="title-edit">
+              <input
+                value={titleDraft}
+                autoFocus
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveTitle()
+                  if (e.key === 'Escape') setEditingTitle(false)
+                }}
+              />
+              <div className="row">
+                <button className="btn small primary" onClick={saveTitle}>
+                  保存
+                </button>
+                <button className="btn small" onClick={() => setEditingTitle(false)}>
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h1>{material.title}</h1>
+              <button className="link small" onClick={startRename}>
+                重命名
+              </button>
+            </>
+          )}
           <p className="muted small">
             {material.kind === 'article' ? '文章' : material.kind === 'youtube' ? 'YouTube' : '本地视频'} ·{' '}
             {material.cues.length} 句 · {marks.length} 个标记
@@ -191,7 +271,7 @@ export function MaterialPage({ id }: { id: string }) {
               <p className="muted small">
                 {lookupMode
                   ? '点单词查释义；气泡里可以一键标记生词。'
-                  : '点单词直接标记；右侧可以切到查词模式。'}
+                  : '点单词直接标记；选中 2–6 个词可以标记短语。'}
               </p>
             </div>
           )}
@@ -209,9 +289,13 @@ export function MaterialPage({ id }: { id: string }) {
                   const due = new Date(m.card.due).getTime() <= Date.now()
                   return (
                     <li key={m.id}>
-                      <div>
-                        <b>{m.text}</b>
-                        <em className={due ? 'due' : 'cooled'}>{due ? '待复习' : `${new Date(m.card.due).toLocaleDateString()} 复习`}</em>
+                      <div className="mark-main">
+                        <div>
+                          <b>{m.text}</b>
+                          {m.kind === 'phrase' && <em className="phrase-tag">短语</em>}
+                          <em className={due ? 'due' : 'cooled'}>{due ? '待复习' : `${new Date(m.card.due).toLocaleDateString()} 复习`}</em>
+                        </div>
+                        <NoteEditor note={m.note} compact onSave={(note) => saveNote(m, note)} />
                       </div>
                       <button
                         className="link small"
@@ -248,6 +332,7 @@ export function MaterialPage({ id }: { id: string }) {
                   text={cue.text}
                   marks={marksByCue.get(cue.index) ?? []}
                   onWord={onWord(cue)}
+                  onPhrase={(p) => togglePhrase(cue, p)}
                 />
               </div>
             )
