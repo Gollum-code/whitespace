@@ -34,6 +34,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
+          if (!res.ok) throw new Error('navigation failed')
           const copy = res.clone()
           caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {})
           return res
