@@ -204,32 +204,61 @@ const IRREGULAR: Record<string, string> = {
   taught: 'teach', fought: 'fight', sought: 'seek', sold: 'sell', won: 'win',
   forgot: 'forget', forgotten: 'forget', hit: 'hit', read: 'read',
   better: 'good', best: 'good', worse: 'bad', worst: 'bad',
+  agreed: 'agree', freed: 'free', guaranteed: 'guarantee',
+  knives: 'knife', lives: 'life', wives: 'wife', movies: 'movie', cookies: 'cookie',
 }
+
+/** 去掉 -ing/-ed 后需要补回 e 的常见词干（make → mak, use → us）。 */
+const E_VERB_STEMS = new Set([
+  'mak', 'tak', 'com', 'giv', 'hav', 'lov', 'us', 'writ', 'driv', 'mov', 'liv',
+  'leav', 'belie', 'receiv', 'achiev', 'choos', 'los', 'rais', 'ris', 'plac',
+  'fac', 'forc', 'notic', 'manag', 'chang', 'ariv', 'decid', 'includ', 'provid',
+  'creat', 'relat', 'produc', 'reduc', 'introduc', 'requir', 'desir', 'admir',
+  'acquir', 'inspir', 'prepar', 'compar', 'shar', 'car', 'dar', 'stare', 'spar',
+  'declar', 'repres', 'releas', 'increas', 'decreas', 'pleas', 'measur',
+  'ensur', 'assur', 'captur', 'featur', 'manag', 'damag', 'encourag', 'discourag',
+  'imag', 'us', 'abus', 'refus', 'accus', 'confus', 'pursu', 'valu', 'continu',
+])
 
 /** 粗糙但够用的词形还原：不规则表 → 规则后缀。 */
 export function lemmaOf(raw: string): string {
+  const hadPossessive = /[’']s$/i.test(raw)
   const w = raw.toLowerCase().replace(/[’']s$/, '').replace(/[^a-z'-]/g, '')
   if (!w) return raw.toLowerCase()
+  if (hadPossessive) return w
   if (IRREGULAR[w]) return IRREGULAR[w]
 
+  const dedouble = (b: string) => (/[^aeiou]$/.test(b) && /([^aeiou])\1$/.test(b) ? b.slice(0, -1) : b)
+
   const rules: [RegExp, (s: string) => string][] = [
-    [/ies$/, (s) => s.slice(0, -3) + 'y'],
+    [/ies$/, (s) => {
+      const b = s.slice(0, -3)
+      return b.length < 2 ? b + 'ie' : b + 'y'
+    }],
     [/ves$/, (s) => s.slice(0, -3) + 'f'],
     [/(ches|shes|sses|xes|zes)$/, (s) => s.slice(0, -2)],
     [/([^s])s$/, (s) => s.slice(0, -1)],
-    [/ying$/, (s) => s.slice(0, -4) + 'ie'],
+    [/ying$/, (s) => {
+      const b3 = s.slice(0, -3)
+      if (b3.length >= 3 && b3.endsWith('y')) return b3
+      return s.slice(0, -4) + 'ie'
+    }],
     [/ing$/, (s) => {
+      const b = dedouble(s.slice(0, -3))
+      if (b.endsWith('e')) return b
+      return E_VERB_STEMS.has(b) ? b + 'e' : b
+    }],
+    [/ied$/, (s) => {
       const b = s.slice(0, -3)
-      return /([^aeiou])\1$/.test(b) ? b.slice(0, -1) : /[^aeiou]e$/.test(b) ? b : b + 'e'
+      return b.length < 2 ? b + 'ie' : b + 'y'
     }],
-    [/ied$/, (s) => s.slice(0, -3) + 'y'],
     [/ed$/, (s) => {
-      const b = s.slice(0, -2)
-      if (/([^aeiou])\1$/.test(b)) return b.slice(0, -1)
-      return /e$/.test(b) ? b : b + 'e'
+      const b = dedouble(s.slice(0, -2))
+      if (b.endsWith('e')) return b
+      return E_VERB_STEMS.has(b) ? b + 'e' : b
     }],
-    [/est$/, (s) => s.slice(0, -3)],
-    [/er$/, (s) => s.slice(0, -2)],
+    [/est$/, (s) => dedouble(s.slice(0, -3))],
+    [/er$/, (s) => dedouble(s.slice(0, -2))],
     [/ly$/, (s) => s.slice(0, -2)],
   ]
   for (const [re, fn] of rules) {

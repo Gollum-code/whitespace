@@ -8,7 +8,7 @@ export interface Route {
 }
 
 export function parseRoute(hash: string): Route {
-  const path = hash.replace(/^#/, '') || '/'
+  const path = hash.replace(/^#/, '').split('?')[0] || '/'
   const parts = path.split('/').filter(Boolean)
   if (parts.length === 0) return { name: 'library' }
   if (parts[0] === 'import') return { name: 'import' }

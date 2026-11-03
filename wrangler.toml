@@ -1,3 +1,16 @@
 name = "whitespace"
 compatibility_date = "2026-01-01"
 pages_build_output_dir = "dist"
+
+# 云同步：先在 Cloudflare 控制台（或命令行）创建 KV namespace，
+# 然后把生成的 id 填到下面，部署时 Pages 才会暴露 env.SYNC 给 /api/sync。
+#
+#   npx wrangler kv namespace create SYNC
+#   # 把输出的 id 填到下面
+#
+# 之后在 Cloudflare Pages 项目 → Settings → Functions → KV namespace bindings
+# 里，也添加一个名为 SYNC 的绑定（或直接用下面这个 [[kv_namespaces]]）。
+#
+# [[kv_namespaces]]
+# binding = "SYNC"
+# id = "你的-kv-namespace-id"

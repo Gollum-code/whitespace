@@ -21,8 +21,11 @@ export const Sentence = memo(function Sentence({ text, marks, onWord, onPhrase, 
   const ref = useRef<HTMLSpanElement>(null)
 
   const marked = new Set<string>()
+  let wholeSentence = false
   for (const m of marks) {
-    if (m.text.includes(' ')) {
+    if (m.kind === 'sentence') {
+      wholeSentence = true
+    } else if (m.text.includes(' ')) {
       for (const w of phraseWords(m.text)) marked.add(w)
     } else {
       marked.add(m.text.toLowerCase())
@@ -46,7 +49,15 @@ export const Sentence = memo(function Sentence({ text, marks, onWord, onPhrase, 
   }
 
   return (
-    <span ref={ref} className={dense ? 'sentence dense' : 'sentence'} onMouseUp={handleUp}>
+    <span
+      ref={ref}
+      className={
+        dense
+          ? `sentence dense${wholeSentence ? ' sentence-marked' : ''}`
+          : `sentence${wholeSentence ? ' sentence-marked' : ''}`
+      }
+      onMouseUp={handleUp}
+    >
       {tokens.map((t, i) => {
         if (!t.isWord || !onWord) {
           return <span key={i}>{t.text}</span>

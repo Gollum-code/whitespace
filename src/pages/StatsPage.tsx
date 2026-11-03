@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db } from '../db'
+import { computeAchievements } from '../lib/achievements'
 import { go } from '../lib/nav'
-import type { ReviewLog, RatingName } from '../types'
+import type { DrillKind, Mark, Material, ReviewLog, RatingName } from '../types'
 
 const RATING: RatingName[] = ['again', 'hard', 'good', 'easy']
 const RATING_LABEL: Record<RatingName, string> = {
@@ -26,19 +27,30 @@ function addDays(d: Date, n: number): Date {
 
 export function StatsPage() {
   const [reviews, setReviews] = useState<ReviewLog[]>([])
+  const [marks, setMarks] = useState<Mark[]>([])
+  const [materials, setMaterials] = useState<Material[]>([])
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     let alive = true
-    db.allReviews().then((r) => {
+    ;(async () => {
+      const [r, mk, ms] = await Promise.all([db.allReviews(), db.getAllMarks(), db.allMaterials()])
       if (!alive) return
       setReviews(r as ReviewLog[])
+      setMarks(mk as Mark[])
+      setMaterials(ms as Material[])
       setLoaded(true)
-    })
+    })()
     return () => {
       alive = false
     }
   }, [])
+
+  const achievements = useMemo(() => {
+    const kinds = new Set<DrillKind>()
+    for (const r of reviews) if (r.drillKind !== 'listen') kinds.add(r.drillKind)
+    return computeAchievements(marks, reviews, materials, kinds)
+  }, [marks, reviews, materials])
 
   const s = useMemo(() => {
     const today = new Date()
@@ -173,6 +185,39 @@ export function StatsPage() {
                   <div className={`rb-fill ${r}`} style={{ width: `${pct}%` }} />
                 </div>
                 <span className="rb-count">{c}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {achievements.streakReward && (
+        <div className="banner">
+          <span>🏆 {achievements.streakReward}</span>
+        </div>
+      )}
+
+      <div className="panel stats-panel">
+        <div className="stat-head">
+          <b>成就</b>
+          <span className="muted small">
+            {achievements.unlocked}/{achievements.list.length} 已解锁
+          </span>
+        </div>
+        <div className="badge-grid">
+          {achievements.list.map((a) => {
+            const done = a.progress >= a.target
+            const pct = Math.min(100, Math.round((a.progress / a.target) * 100))
+            return (
+              <div key={a.id} className={`badge ${done ? 'unlocked' : 'locked'}`} title={a.desc}>
+                <span className="badge-icon">{done ? a.icon : '🔒'}</span>
+                <span className="badge-title">{a.title}</span>
+                <span className="badge-bar">
+                  <i style={{ width: `${pct}%` }} />
+                </span>
+                <span className="muted small">
+                  {a.progress}/{a.target}
+                </span>
               </div>
             )
           })}

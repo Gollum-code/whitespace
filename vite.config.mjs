@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// 本地云同步的临时存储（内存，刷新进程即清空；部署后走 Cloudflare KV）
+const syncStore = new Map()
+
 /**
  * 本地开发时，用 vite 内置的中间件实现和线上 Worker 完全一致的 /api/llm 与 /api/fetch。
  * 这样前端代码在 dev / prod 下没有任何区别，也不需要本地跑一个后端。
@@ -92,6 +95,44 @@ function devApi(env) {
             res.statusCode = 502
             res.end(JSON.stringify({ error: String(e) }))
           }
+          return
+        }
+
+        // ---- 云同步（本地用内存模拟 KV；部署时走 Cloudflare KV）----
+        if (url.pathname === '/api/sync') {
+          const room = (url.searchParams.get('room') || '').slice(0, 64)
+          res.setHeader('content-type', 'application/json')
+          if (!room) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: 'missing room' }))
+            return
+          }
+          if (req.method === 'PUT') {
+            let body = ''
+            for await (const chunk of req) body += chunk
+            try {
+              const parsed = JSON.parse(body || '{}')
+              if (!parsed.ct) throw new Error('missing ct')
+              syncStore.set(room, JSON.stringify({ iv: String(parsed.iv), ct: String(parsed.ct), ts: Date.now() }))
+              res.end(JSON.stringify({ ok: true }))
+            } catch (e) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: String(e) }))
+            }
+            return
+          }
+          if (req.method === 'GET') {
+            const rec = syncStore.get(room)
+            res.end(JSON.stringify(rec ? JSON.parse(rec) : { ct: null }))
+            return
+          }
+          if (req.method === 'DELETE') {
+            syncStore.delete(room)
+            res.end(JSON.stringify({ ok: true }))
+            return
+          }
+          res.statusCode = 405
+          res.end(JSON.stringify({ error: 'method not allowed' }))
           return
         }
 

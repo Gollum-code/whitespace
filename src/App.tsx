@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { db } from './db'
 import { go, parseRoute } from './lib/nav'
 import { isDue, refreshScheduler } from './lib/srs'
-import { exportMarksCsv } from './lib/exporter'
+import { exportAnkiTsv, exportMarksCsv } from './lib/exporter'
+import { syncPull, syncPush } from './lib/sync'
 import { LibraryPage } from './pages/LibraryPage'
 import { ImportPage } from './pages/ImportPage'
 import { MaterialPage } from './pages/MaterialPage'
@@ -29,9 +30,15 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    const t = localStorage.getItem('whitespace:theme')
+    document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light'
+  }, [])
+
+  useEffect(() => {
     const refresh = async () => {
       const marks = (await db.getAllMarks()) as Mark[]
-      setDueCount(marks.filter((m) => isDue(m.card)).length)
+      const due = marks.filter((m) => isDue(m.card))
+      setDueCount(new Set(due.map((m) => m.lemma)).size)
     }
     refresh()
     const t = window.setInterval(refresh, 5000)
@@ -40,6 +47,19 @@ export function App() {
 
   useEffect(() => {
     return () => stopSpeak()
+  }, [])
+
+  // 自动备份：每天最多一次，把快照存进 IndexedDB（离线可恢复，防止误删）
+  useEffect(() => {
+    const autoBackup = async () => {
+      const last = await db.getMeta<number>('lastAutoBackupAt')
+      if (last && Date.now() - last < 86_400_000) return
+      const marks = await db.getAllMarks()
+      if (!marks.length) return
+      await db.saveSnapshot(await db.exportAll())
+      await db.putMeta('lastAutoBackupAt', Date.now())
+    }
+    autoBackup().catch(() => {})
   }, [])
 
   const route = parseRoute(hash)
@@ -74,7 +94,7 @@ export function App() {
       </header>
 
       <main>
-        {route.name === 'library' && <LibraryPage />}
+        {route.name === 'library' && <LibraryPage onOpenSettings={() => setShowSettings(true)} />}
         {route.name === 'import' && <ImportPage />}
         {route.name === 'material' && route.param && <MaterialPage id={route.param} />}
         {route.name === 'review' && <ReviewPage />}
@@ -101,9 +121,14 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [speechRate, setSpeechRate] = useState(() => readSetting('whitespace:speechRate', '0.95'))
   const [limit, setLimit] = useState(() => readSetting('whitespace:newLimit', '20'))
   const [retention, setRetention] = useState(() => readSetting('whitespace:retention', '0.9'))
+  const [maxInterval, setMaxInterval] = useState(() => readSetting('whitespace:maxInterval', '365'))
+  const [theme, setTheme] = useState(() => readSetting('whitespace:theme', 'light'))
   const [mode, setMode] = useState<'merge' | 'replace'>('merge')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [syncPass, setSyncPass] = useState(() => readSetting('whitespace:syncPass', ''))
+  const [syncMsg, setSyncMsg] = useState('')
+  const [snapshots, setSnapshots] = useState<{ id: string; at: number }[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const save = () => {
@@ -115,8 +140,86 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     localStorage.setItem('whitespace:newLimit', String(n))
     const ret = Number(retention)
     localStorage.setItem('whitespace:retention', String(Number.isFinite(ret) ? ret : 0.9))
+    const mi = Number(maxInterval)
+    localStorage.setItem('whitespace:maxInterval', String(Number.isFinite(mi) ? mi : 365))
+    localStorage.setItem('whitespace:theme', theme === 'dark' ? 'dark' : 'light')
+    if (syncPass.trim()) localStorage.setItem('whitespace:syncPass', syncPass.trim())
+    else localStorage.removeItem('whitespace:syncPass')
+    document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light'
     refreshScheduler()
     onClose()
+  }
+
+  const loadSnapshots = async () => {
+    const all = await db.listSnapshots()
+    setSnapshots(all.sort((a, b) => b.at - a.at).map((s) => ({ id: s.id, at: s.at })))
+  }
+
+  useEffect(() => {
+    loadSnapshots()
+  }, [])
+
+  const makeSnapshot = async () => {
+    setBusy(true)
+    setMsg('')
+    try {
+      const snap = await db.saveSnapshot(await db.exportAll())
+      await db.putMeta('lastAutoBackupAt', Date.now())
+      await db.putMeta('lastBackupAt', Date.now())
+      await loadSnapshots()
+      setMsg(`已保存快照（${new Date(snap.at).toLocaleString()}）。`)
+    } catch (e) {
+      setMsg(`快照失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const restoreSnapshot = async (id: string) => {
+    if (!confirm('从快照恢复会覆盖当前数据，确定吗？')) return
+    setBusy(true)
+    setMsg('')
+    try {
+      const snap = await db.getSnapshot(id)
+      if (!snap) throw new Error('快照不存在')
+      await db.importAll(snap.data, 'replace')
+      setMsg('已从快照恢复，页面即将刷新。')
+      setTimeout(() => location.reload(), 900)
+    } catch (e) {
+      setMsg(`恢复失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const doSyncPush = async () => {
+    const pass = syncPass.trim()
+    if (!pass) return setSyncMsg('先填一个同步口令')
+    setBusy(true)
+    setSyncMsg('')
+    try {
+      const n = await syncPush(pass)
+      setSyncMsg(`已上传 ${n} 个标记到云端。`)
+    } catch (e) {
+      setSyncMsg(`上传失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const doSyncPull = async () => {
+    const pass = syncPass.trim()
+    if (!pass) return setSyncMsg('先填一个同步口令')
+    setBusy(true)
+    setSyncMsg('')
+    try {
+      const c = await syncPull(pass)
+      setSyncMsg(`已合并云端数据：${c.marks} 个标记、${c.materials} 个素材、${c.reviews} 条复习。`)
+    } catch (e) {
+      setSyncMsg(`拉取失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const exportBackup = async () => {
@@ -131,6 +234,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       a.download = `whitespace-backup-${new Date().toISOString().slice(0, 10)}.json`
       a.click()
       URL.revokeObjectURL(url)
+      await db.putMeta('lastBackupAt', Date.now())
       setMsg(`已导出 ${data.materials.length} 个素材、${data.marks.length} 个标记。`)
     } catch (e) {
       setMsg(`导出失败：${e instanceof Error ? e.message : String(e)}`)
@@ -205,6 +309,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <option value="0.95">95% · 复习更勤</option>
             </select>
           </label>
+          <label className="field">
+            <span>最大间隔（天）</span>
+            <select value={maxInterval} onChange={(e) => setMaxInterval(e.target.value)}>
+              <option value="90">90 · 更频繁</option>
+              <option value="180">180</option>
+              <option value="365">365 · 默认</option>
+              <option value="730">730</option>
+              <option value="1825">1825 · 更久</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>主题</span>
+            <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
         </div>
 
         <div className="row">
@@ -260,8 +381,75 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           >
             ⬇ 导出 CSV
           </button>
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              setMsg('')
+              try {
+                const n = await exportAnkiTsv()
+                setMsg(`已导出 ${n} 个标记到 Anki TSV（正面挖空 / 背面释义）。`)
+              } catch (e) {
+                setMsg(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            🗂 导出 Anki
+          </button>
         </div>
         {msg && <p className="backup-msg small">{msg}</p>}
+
+        <hr />
+
+        <h3>自动备份（本地快照）</h3>
+        <p className="muted small">
+          每天自动存一份快照到浏览器里（保留最近 10 份），防止误删、改坏数据。清浏览器数据前仍需手动导出。
+        </p>
+        <div className="row">
+          <button className="btn small" onClick={makeSnapshot} disabled={busy}>
+            立即备份快照
+          </button>
+        </div>
+        {snapshots.length > 0 && (
+          <div className="snapshot-list">
+            {snapshots.map((s) => (
+              <div key={s.id} className="snapshot-row">
+                <span className="muted small">{new Date(s.at).toLocaleString()}</span>
+                <button className="link small" onClick={() => restoreSnapshot(s.id)} disabled={busy}>
+                  恢复
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <hr />
+
+        <h3>云同步（跨设备）</h3>
+        <p className="muted small">
+          填一个只有你会的「同步口令」，在这台设备推送、那台设备拉取。数据用口令加密后才上传，服务端看不到内容；
+          忘记口令数据就找不回。部署时需给 Pages 项目绑定名为 <code>SYNC</code> 的 KV namespace（见 README）。
+        </p>
+        <label className="field">
+          <span>同步口令</span>
+          <input
+            value={syncPass}
+            onChange={(e) => setSyncPass(e.target.value)}
+            placeholder="至少 6 位，两台设备填一样的"
+          />
+        </label>
+        <div className="row">
+          <button className="btn small" onClick={doSyncPush} disabled={busy || !syncPass.trim()}>
+            ⬆ 推送到云端
+          </button>
+          <button className="btn small" onClick={doSyncPull} disabled={busy || !syncPass.trim()}>
+            ⬇ 从云端拉取
+          </button>
+        </div>
+        {syncMsg && <p className="backup-msg small">{syncMsg}</p>}
 
         <hr />
         <p className="muted small">

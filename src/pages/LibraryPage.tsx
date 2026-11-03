@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { db } from '../db'
+import { Onboarding } from '../components/Onboarding'
 import { go } from '../lib/nav'
 import { isDue, isMastered } from '../lib/srs'
 import { createSampleMaterial } from '../lib/sample'
@@ -11,12 +12,14 @@ const KIND_LABEL: Record<Material['kind'], string> = {
   local: '本地视频',
 }
 
-export function LibraryPage() {
+export function LibraryPage({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [materials, setMaterials] = useState<Material[]>([])
   const [marks, setMarks] = useState<Mark[]>([])
   const [loaded, setLoaded] = useState(false)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState<'all' | MaterialKind>('all')
+  const [backupDays, setBackupDays] = useState<number | null>(null)
+  const [showOnboard, setShowOnboard] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -26,6 +29,12 @@ export function LibraryPage() {
       setMaterials(ms)
       setMarks(mk as Mark[])
       setLoaded(true)
+      const last = await db.getMeta<number>('lastBackupAt')
+      if (!alive) return
+      setBackupDays(last ? Math.floor((Date.now() - last) / 86_400_000) : null)
+      const seen = await db.getMeta<boolean>('onboarded')
+      if (!alive) return
+      if (!seen && ms.length === 0) setShowOnboard(true)
     }
     load()
     return () => {
@@ -33,8 +42,8 @@ export function LibraryPage() {
     }
   }, [])
 
-  const due = marks.filter((m) => isDue(m.card)).length
-  const mastered = marks.filter((m) => isMastered(m.card)).length
+  const due = new Set(marks.filter((m) => isDue(m.card)).map((m) => m.lemma)).size
+  const mastered = new Set(marks.filter((m) => isMastered(m.card)).map((m) => m.lemma)).size
   const byMaterial = new Map<string, number>()
   for (const m of marks) byMaterial.set(m.materialId, (byMaterial.get(m.materialId) ?? 0) + 1)
 
@@ -43,8 +52,14 @@ export function LibraryPage() {
     (m) => (kind === 'all' || m.kind === kind) && (!needle || m.title.toLowerCase().includes(needle)),
   )
 
+  const dismissOnboard = () => {
+    db.putMeta('onboarded', true)
+    setShowOnboard(false)
+  }
+
   return (
     <div className="page">
+      {showOnboard && <Onboarding onDone={dismissOnboard} />}
       <section className="hero">
         <div>
           <h1>素材库</h1>
@@ -81,6 +96,19 @@ export function LibraryPage() {
           <span>有 {due} 个词到复习时间了。</span>
           <button className="btn small primary" onClick={() => go('/review')}>
             去复习 →
+          </button>
+        </div>
+      )}
+
+      {loaded && marks.length > 0 && (backupDays === null || backupDays >= 7) && (
+        <div className="banner warn">
+          <span>
+            {backupDays === null
+              ? '还没有导出过备份，清除浏览器数据会全部丢失。'
+              : `上次备份是 ${backupDays} 天前。`}
+          </span>
+          <button className="btn small" onClick={() => onOpenSettings?.()}>
+            去导出 →
           </button>
         </div>
       )}

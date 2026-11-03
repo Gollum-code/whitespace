@@ -3,8 +3,16 @@ import type { CardRec, RatingName } from '../types'
 
 /** 目标记忆率：可设置，默认 0.9（Anki 常规）。改完调用 refreshScheduler 生效。 */
 function retention(): number {
+  if (typeof localStorage === 'undefined') return 0.9
   const raw = Number(localStorage.getItem('whitespace:retention') ?? '')
   return Number.isFinite(raw) && raw >= 0.7 && raw <= 0.99 ? raw : 0.9
+}
+
+/** 最大间隔（天）：可设置，默认 365。改完调用 refreshScheduler 生效。 */
+function maxInterval(): number {
+  if (typeof localStorage === 'undefined') return 365
+  const raw = Number(localStorage.getItem('whitespace:maxInterval') ?? '')
+  return Number.isFinite(raw) && raw >= 30 && raw <= 3650 ? Math.floor(raw) : 365
 }
 
 function makeScheduler() {
@@ -13,6 +21,7 @@ function makeScheduler() {
       enable_fuzz: true,
       enable_short_term: true,
       request_retention: retention(),
+      maximum_interval: maxInterval(),
     }),
   )
 }

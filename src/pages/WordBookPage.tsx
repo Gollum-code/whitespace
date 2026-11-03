@@ -3,7 +3,7 @@ import { db } from '../db'
 import { go } from '../lib/nav'
 import { isDue, isMastered } from '../lib/srs'
 import { SpeakerButton } from '../components/SpeakerButton'
-import type { Mark, Material } from '../types'
+import type { Mark, MarkKind, Material } from '../types'
 
 type Filter = 'all' | 'due' | 'mastered' | 'leech'
 type Sort = 'recent' | 'due' | 'lapses'
@@ -11,6 +11,7 @@ type Sort = 'recent' | 'due' | 'lapses'
 interface Agg {
   lemma: string
   forms: Map<string, number>
+  kinds: Set<MarkKind>
   count: number
   materialIds: Set<string>
   due: number
@@ -26,6 +27,12 @@ const FILTER_LABEL: Record<Filter, string> = {
   due: '待复习',
   mastered: '已掌握',
   leech: '难词',
+}
+
+/** 整句标记的 lemma 带 `sentence:` 前缀，显示时去掉并截断。 */
+function displayLemma(lemma: string): string {
+  const s = lemma.startsWith('sentence:') ? lemma.slice('sentence:'.length) : lemma
+  return s.length > 40 ? s.slice(0, 38) + '…' : s
 }
 
 export function WordBookPage() {
@@ -60,6 +67,7 @@ export function WordBookPage() {
         a = {
           lemma: m.lemma,
           forms: new Map(),
+          kinds: new Set(),
           count: 0,
           materialIds: new Set(),
           due: 0,
@@ -72,6 +80,7 @@ export function WordBookPage() {
         map.set(m.lemma, a)
       }
       a.count += 1
+      a.kinds.add(m.kind)
       a.forms.set(m.text.toLowerCase(), (a.forms.get(m.text.toLowerCase()) ?? 0) + 1)
       a.materialIds.add(m.materialId)
       if (isDue(m.card)) a.due += 1
@@ -194,16 +203,18 @@ export function WordBookPage() {
           <div key={a.lemma} className="wordbook-row">
             <div className="wb-main">
               <div className="wb-word">
-                <b>{a.lemma}</b>
+                <b>{displayLemma(a.lemma)}</b>
                 <SpeakerButton text={a.lemma} small />
+                {a.kinds.has('sentence') && <em className="phrase-tag">整句</em>}
+                {a.kinds.has('phrase') && <em className="phrase-tag">短语</em>}
                 {a.mastered && <em className="mastered">已掌握</em>}
                 {a.due > 0 && <em className="due">{a.due} 待复习</em>}
                 {a.lapses >= 4 && <em className="leech-tag">难词</em>}
               </div>
               <div className="wb-forms">
                 {[...a.forms.entries()].map(([f, n]) => (
-                  <span key={f} className="form-chip">
-                    {f}
+                  <span key={f} className="form-chip" title={f}>
+                    {f.length > 26 ? f.slice(0, 24) + '…' : f}
                     {n > 1 && <small>×{n}</small>}
                   </span>
                 ))}

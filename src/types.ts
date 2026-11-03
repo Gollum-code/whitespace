@@ -32,7 +32,7 @@ export interface CardRec {
   last_review?: string
 }
 
-export type MarkKind = 'word' | 'phrase'
+export type MarkKind = 'word' | 'phrase' | 'sentence'
 
 export interface Mark {
   id: string
@@ -45,15 +45,25 @@ export interface Mark {
   endSec?: number
   createdAt: number
   card: CardRec
-  /** 用户笔记，比如搭配、易错点、个人例句。 */
+  /** 用户笔记：搭配、易错点、用法总结等。 */
   note?: string
+  /** 个人例句：自己造的、想记牢的句子。 */
+  example?: string
+}
+
+/** 本地自动备份快照（存在 IndexedDB，防止误删/损坏，离线可恢复）。 */
+export interface Snapshot {
+  id: string
+  at: number
+  data: unknown
 }
 
 /**
- * 题型。cloze = 挖空填空；scramble = 连词成句；choice = 选词填空。
- * 听力不是独立题型，而是 cloze 的一种呈现方式（隐藏句子只听音频）。
+ * 题型。cloze = 挖空填空；scramble = 连词成句；choice = 选词填空；
+ * dictate = 整句听写；fix = 改错（句子有个错词）；def = 释义选择。
+ * 听力也是闭卡的一种呈现方式（隐藏句子只听音频）。
  */
-export type DrillKind = 'cloze' | 'scramble' | 'choice'
+export type DrillKind = 'cloze' | 'scramble' | 'choice' | 'dictate' | 'fix' | 'def'
 
 export interface DrillBase {
   promptVersion: string
@@ -81,7 +91,39 @@ export interface ChoiceDrill extends DrillBase {
   options: string[] // 四个选项，含正确答案
 }
 
-export type DrillData = ClozeDrill | ScrambleDrill | ChoiceDrill
+export interface DictateDrill extends DrillBase {
+  kind: 'dictate'
+  sentence: string // 要听的完整句子
+  answer: string // 与 sentence 相同
+}
+
+export interface FixDrill extends DrillBase {
+  kind: 'fix'
+  sentence: string // 含一个错词的句子
+  answer: string // 正确的词
+  wrong: string // 错的词
+  options: string[] // 四个选项，含正确答案
+}
+
+export interface DefOption {
+  text: string
+  pos: string
+  meaningZh: string
+}
+
+export interface DefDrill extends DrillBase {
+  kind: 'def'
+  word: string
+  options: DefOption[] // 四个中文释义，含正确一个
+}
+
+export type DrillData =
+  | ClozeDrill
+  | ScrambleDrill
+  | ChoiceDrill
+  | DictateDrill
+  | FixDrill
+  | DefDrill
 
 /** 旧版缓存里 data 没有 kind 字段，读取时按 cloze 兼容。 */
 export interface Drill {

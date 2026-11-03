@@ -17,10 +17,32 @@ const UA =
 function corsHeaders() {
   return {
     'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'access-control-allow-headers': 'content-type, x-app-key',
     'access-control-max-age': '86400',
   }
+}
+
+/** 简单内存限流（每个 isolate 独立，best-effort）：40 次/分钟/IP。 */
+const RATE = { windowMs: 60_000, max: 40 }
+const hits = new Map()
+
+function rateLimited(request) {
+  const ip =
+    request.headers.get('cf-connecting-ip') ||
+    (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() ||
+    'unknown'
+  const now = Date.now()
+  let rec = hits.get(ip)
+  if (!rec || now - rec.start > RATE.windowMs) {
+    rec = { start: now, n: 0 }
+    hits.set(ip, rec)
+  }
+  rec.n += 1
+  if (hits.size > 5000) {
+    for (const [k, v] of hits) if (now - v.start > RATE.windowMs) hits.delete(k)
+  }
+  return rec.n > RATE.max
 }
 
 function json(data, status = 200) {
@@ -55,6 +77,7 @@ export async function handle(request, env) {
 
   if (path === '/api/llm' && request.method === 'POST') {
     if (!authorized(request, env)) return json({ error: '口令不对' }, 401)
+    if (rateLimited(request)) return json({ error: '请求太频繁，稍后再试' }, 429)
     const apiKey = env.AI_API_KEY
     if (!apiKey) return json({ error: '服务端未配置 AI_API_KEY' }, 500)
 
@@ -108,6 +131,44 @@ export async function handle(request, env) {
     } catch (e) {
       return json({ error: String(e) }, 502)
     }
+  }
+
+  // ---- 云同步：把加密后的备份存进 KV，服务端不看内容 ----
+  if (path === '/api/sync') {
+    if (!authorized(request, env)) return json({ error: '口令不对' }, 401)
+    const kv = env.SYNC
+    if (!kv) return json({ error: '未配置云同步：部署时需绑定名为 SYNC 的 KV namespace（见 README「云同步」）' }, 501)
+    if (rateLimited(request)) return json({ error: '请求太频繁，稍后再试' }, 429)
+    const room = (url.searchParams.get('room') || '').slice(0, 64)
+    if (!room) return json({ error: 'missing room' }, 400)
+    const key = `sync:${room}`
+
+    if (request.method === 'PUT') {
+      const size = Number(request.headers.get('content-length') || 0)
+      if (size > 5_000_000) return json({ error: '备份太大（>5MB）' }, 413)
+      let body
+      try {
+        body = await request.json()
+      } catch {
+        return json({ error: 'body 不是 JSON' }, 400)
+      }
+      if (!body || !body.ct) return json({ error: '缺少密文' }, 400)
+      await kv.put(key, JSON.stringify({ iv: String(body.iv), ct: String(body.ct), ts: Date.now() }))
+      return json({ ok: true, ts: Date.now() })
+    }
+
+    if (request.method === 'GET') {
+      const rec = await kv.get(key)
+      if (!rec) return json({ ct: null })
+      return json(JSON.parse(rec))
+    }
+
+    if (request.method === 'DELETE') {
+      await kv.delete(key)
+      return json({ ok: true })
+    }
+
+    return json({ error: 'method not allowed' }, 405)
   }
 
   return json({ error: 'not found' }, 404)

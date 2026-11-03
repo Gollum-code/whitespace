@@ -87,17 +87,20 @@ export function MaterialPage({ id }: { id: string }) {
       return
     }
     if (existing) return
+    const lemma = lemmaOf(word)
+    // 同一个词已标记过就沿用它的卡片，做到一词一卡、进度同步
+    const same = marks.find((m) => m.lemma === lemma)
     const mark: Mark = {
       id: crypto.randomUUID(),
       materialId: material.id,
       cueIndex: cue.index,
       kind: 'word',
       text: word,
-      lemma: lemmaOf(word),
+      lemma,
       startSec: cue.startSec,
       endSec: cue.endSec,
       createdAt: Date.now(),
-      card: newCard(),
+      card: same ? same.card : newCard(),
     }
     await db.putMark(mark)
     setMarks((prev) => [...prev, mark])
@@ -116,13 +119,43 @@ export function MaterialPage({ id }: { id: string }) {
       setToast(`已取消短语「${norm}」`)
       return
     }
+    const lemma = norm.toLowerCase()
+    const same = marks.find((m) => m.lemma === lemma)
     const mark: Mark = {
       id: crypto.randomUUID(),
       materialId: material.id,
       cueIndex: cue.index,
       kind: 'phrase',
       text: norm,
-      lemma: norm.toLowerCase(),
+      lemma,
+      startSec: cue.startSec,
+      endSec: cue.endSec,
+      createdAt: Date.now(),
+      card: same ? same.card : newCard(),
+    }
+    await db.putMark(mark)
+    setMarks((prev) => [...prev, mark])
+    setToast(`已标记短语「${norm}」`)
+  }
+
+  const toggleSentence = async (cue: Cue) => {
+    const text = cue.text.replace(/\s+/g, ' ').trim()
+    if (!text) return
+    const existing = marks.find((m) => m.cueIndex === cue.index && m.kind === 'sentence')
+    if (existing) {
+      await db.delMark(existing.id)
+      setMarks((prev) => prev.filter((m) => m.id !== existing.id))
+      setToast('已取消整句标记')
+      return
+    }
+    const lemma = `sentence:${text.toLowerCase()}`
+    const mark: Mark = {
+      id: crypto.randomUUID(),
+      materialId: material.id,
+      cueIndex: cue.index,
+      kind: 'sentence',
+      text,
+      lemma,
       startSec: cue.startSec,
       endSec: cue.endSec,
       createdAt: Date.now(),
@@ -130,11 +163,11 @@ export function MaterialPage({ id }: { id: string }) {
     }
     await db.putMark(mark)
     setMarks((prev) => [...prev, mark])
-    setToast(`已标记短语「${norm}」`)
+    setToast('已标记整句 · 加入今日复习')
   }
 
-  const saveNote = async (mark: Mark, note: string) => {
-    const updated: Mark = { ...mark, note: note || undefined }
+  const saveNote = async (mark: Mark, note: string, example: string) => {
+    const updated: Mark = { ...mark, note: note || undefined, example: example || undefined }
     await db.putMark(updated)
     setMarks((prev) => prev.map((m) => (m.id === mark.id ? updated : m)))
   }
@@ -271,7 +304,7 @@ export function MaterialPage({ id }: { id: string }) {
               <p className="muted small">
                 {lookupMode
                   ? '点单词查释义；气泡里可以一键标记生词。'
-                  : '点单词直接标记；选中 2–6 个词可以标记短语。'}
+                  : '点单词标记；选中 2–6 个词标记短语；点「整句」标记整句。'}
               </p>
             </div>
           )}
@@ -293,9 +326,15 @@ export function MaterialPage({ id }: { id: string }) {
                         <div>
                           <b>{m.text}</b>
                           {m.kind === 'phrase' && <em className="phrase-tag">短语</em>}
+                          {m.kind === 'sentence' && <em className="phrase-tag">整句</em>}
                           <em className={due ? 'due' : 'cooled'}>{due ? '待复习' : `${new Date(m.card.due).toLocaleDateString()} 复习`}</em>
                         </div>
-                        <NoteEditor note={m.note} compact onSave={(note) => saveNote(m, note)} />
+                        <NoteEditor
+                          note={m.note}
+                          example={m.example}
+                          compact
+                          onSave={(note, example) => saveNote(m, note, example)}
+                        />
                       </div>
                       <button
                         className="link small"
@@ -327,6 +366,16 @@ export function MaterialPage({ id }: { id: string }) {
                   <span>{String(cue.index + 1).padStart(2, '0')}</span>
                   {cue.startSec != null && <span className="time">{fmtSec(cue.startSec)}</span>}
                   <SpeakerButton text={cue.text} label="朗读这句" small />
+                  <button
+                    className="link small"
+                    title="标记整句为复习卡片"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleSentence(cue)
+                    }}
+                  >
+                    整句
+                  </button>
                 </div>
                 <Sentence
                   text={cue.text}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { db } from '../db'
 import { generateCloze, pool as runPool, AiError } from '../lib/ai'
 import { buildDrill, DRILL_LABEL, pickKind } from '../lib/drills'
@@ -9,6 +9,9 @@ import { tokenize } from '../lib/text'
 import { ClozeCard } from '../components/drills/ClozeCard'
 import { ChoiceCard } from '../components/drills/ChoiceCard'
 import { ScrambleCard } from '../components/drills/ScrambleCard'
+import { DictateCard } from '../components/drills/DictateCard'
+import { FixCard } from '../components/drills/FixCard'
+import { DefCard } from '../components/drills/DefCard'
 import { SpeakerButton } from '../components/SpeakerButton'
 import type { DrillData, DrillKind, Mark, Material, RatingName } from '../types'
 
@@ -55,6 +58,7 @@ function collectPool(materials: Material[]): string[] {
 
 export function ReviewPage() {
   const [items, setItems] = useState<Mark[] | null>(null)
+  const [allDue, setAllDue] = useState<Mark[]>([])
   const [mats, setMats] = useState<Map<string, Material>>(new Map())
   const [wordPool, setWordPool] = useState<string[]>([])
   const [i, setI] = useState(0)
@@ -70,6 +74,7 @@ export function ReviewPage() {
   const [nextDue, setNextDue] = useState<number | null>(null)
   const [deferred, setDeferred] = useState(0)
   const [grading, setGrading] = useState(false)
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
   const load = useCallback(async () => {
     const startOfDay = new Date()
@@ -87,13 +92,25 @@ export function ReviewPage() {
     const limit = newLimit()
     const introducedToday = (reviews as { wasNew: boolean }[]).filter((r) => r.wasNew).length
     const allowed = Math.max(0, limit - introducedToday)
-    const keepNew = new Set(
-      (due as Mark[]).filter(isNew).slice(0, allowed).map((m) => m.id),
-    )
-    const filtered = (due as Mark[]).filter((m) => !isNew(m) || keepNew.has(m.id))
-    setDeferred((due as Mark[]).length - filtered.length)
 
-    setItems(filtered)
+    // 一词一卡：同一个 lemma 只保留一个代表词卡，评分时同步到该词所有出现
+    const groups = new Map<string, Mark[]>()
+    for (const m of due as Mark[]) {
+      const arr = groups.get(m.lemma) ?? []
+      arr.push(m)
+      groups.set(m.lemma, arr)
+    }
+    const reps = [...groups.values()].map((a) => a[0])
+    const keepNew = new Set(
+      reps.filter(isNew).slice(0, allowed).map((r) => r.id),
+    )
+    const chosenReps = reps.filter((r) => !isNew(r) || keepNew.has(r.id))
+    const chosenRepId = new Set(chosenReps.map((r) => r.id))
+    const chosenAll = (due as Mark[]).filter((m) => chosenRepId.has(groups.get(m.lemma)![0].id))
+    setDeferred(reps.length - chosenReps.length)
+
+    setAllDue(chosenAll)
+    setItems(chosenReps)
     setI(0)
     const future = (all as Mark[])
       .filter((m) => !isDue(m.card))
@@ -166,7 +183,12 @@ export function ReviewPage() {
       try {
         const wasNew = isNew(current)
         const updated: Mark = { ...current, card: gradeCard(current.card, rating) }
-        await db.putMark(updated)
+        // 同一个词的所有出现共享同一张卡：一次评分同步整个组
+        const group = allDue.filter((m) => m.lemma === current.lemma)
+        const targets = group.length ? group : [current]
+        for (const m of targets) {
+          await db.putMark({ ...m, card: updated.card })
+        }
         await db.putReview({
           id: crypto.randomUUID(),
           ts: Date.now(),
@@ -177,13 +199,18 @@ export function ReviewPage() {
           drillKind: listenOnly ? 'listen' : (drill?.kind ?? kind),
           wasNew,
         })
-        setItems((prev) => (prev ? prev.map((m) => (m.id === updated.id ? updated : m)) : prev))
+        setAllDue((prev) =>
+          prev.map((m) => (m.lemma === current.lemma ? { ...m, card: updated.card } : m)),
+        )
+        setItems((prev) =>
+          prev ? prev.map((m) => (m.lemma === current.lemma ? { ...m, card: updated.card } : m)) : prev,
+        )
         setI((n) => n + 1)
       } finally {
         setGrading(false)
       }
     },
-    [current, drill, kind, listenOnly, grading],
+    [current, drill, kind, listenOnly, grading, allDue],
   )
 
   // 键盘：1-4 评分；空格重听
@@ -200,12 +227,11 @@ export function ReviewPage() {
       }
       if (e.key === ' ' && drill) {
         e.preventDefault()
-        if (drill.kind === 'cloze') {
-          if (listenOnly) {
-            speakWithGap(drill.sentence)
-          } else {
-            speak(drill.sentence)
-          }
+        if (drill.kind === 'dictate') {
+          speak(drill.sentence)
+        } else if (drill.kind === 'cloze') {
+          if (listenOnly) speakWithGap(drill.sentence)
+          else speak(drill.sentence)
         }
       }
     }
@@ -292,6 +318,35 @@ export function ReviewPage() {
   const answered = result !== null
   const leech = current && current.card.lapses >= 4
 
+  const correctAnswer = drill
+    ? drill.kind === 'def'
+      ? drill.options.find((o) => o.text === drill.word)?.meaningZh ?? ''
+      : drill.answer
+    : ''
+  const speakText = drill
+    ? drill.kind === 'def'
+      ? drill.word
+      : drill.kind === 'dictate' || drill.kind === 'scramble'
+        ? drill.sentence
+        : drill.answer
+    : ''
+
+  // 移动端：答完后左右滑动评分（左 = 忘了，右 = 记得）
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0]
+    touchStart.current = { x: t.clientX, y: t.clientY }
+  }
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStart.current
+    touchStart.current = null
+    if (!start || !locked || grading) return
+    const t = e.changedTouches[0]
+    const dx = t.clientX - start.x
+    const dy = t.clientY - start.y
+    if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return
+    grade(dx > 0 ? 'good' : 'again')
+  }
+
   return (
     <div className="page narrow review-page">
       <div className="review-head">
@@ -317,7 +372,7 @@ export function ReviewPage() {
         </div>
       </div>
 
-      <div className="review-card">
+      <div className="review-card" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <div className="review-word">
           <div>
             <b>{current!.text}</b>
@@ -374,20 +429,32 @@ export function ReviewPage() {
         {drill?.kind === 'scramble' && (
           <ScrambleCard key={current!.id} drill={drill} locked={locked} onResult={onResult} />
         )}
+        {drill?.kind === 'dictate' && (
+          <DictateCard key={current!.id} drill={drill} locked={locked} onResult={onResult} />
+        )}
+        {drill?.kind === 'fix' && (
+          <FixCard key={current!.id} drill={drill} locked={locked} onResult={onResult} />
+        )}
+        {drill?.kind === 'def' && (
+          <DefCard key={current!.id} drill={drill} locked={locked} onResult={onResult} />
+        )}
 
         {locked && drill && (
           <div className={answered ? (result ? 'feedback ok' : 'feedback bad') : 'feedback neutral'}>
             <b>{answered ? (result ? '✅ 答对了' : '❌ 不对') : '答案'}</b>
             <span>
-              正确答案：<b>{drill.answer}</b>
+              正确答案：<b>{correctAnswer}</b>
             </span>
             {drill.glossZh && <span className="muted"> · {drill.glossZh}</span>}
-            <SpeakerButton text={drill.kind === 'scramble' ? drill.sentence : drill.answer} small />
+            <SpeakerButton text={speakText} small />
           </div>
         )}
 
         {revealed && drill?.hintZh && <p className="muted small">提示：{drill.hintZh}</p>}
         {revealed && current?.note && <p className="muted small">我的笔记：{current.note}</p>}
+        {revealed && current?.example && (
+          <p className="muted small">我造的例句：{current.example}</p>
+        )}
 
         {!locked && (
           <button className="link small" onClick={() => setRevealed(true)}>
@@ -416,6 +483,7 @@ export function ReviewPage() {
         {locked && (
           <div className="rating-row">
             <span className="muted small">这次记得怎么样？</span>
+            <span className="muted small swipe-hint">← 忘了 · 记得 →</span>
             <div className="ratings">
               {(Object.keys(RATING_LABEL) as RatingName[]).map((r) => (
                 <button

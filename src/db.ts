@@ -1,8 +1,8 @@
-import type { Drill, LookupRec, Mark, Material, ReviewLog } from './types'
+import type { Drill, LookupRec, Mark, Material, ReviewLog, Snapshot } from './types'
 
 const DB_NAME = 'whitespace'
-const DB_VER = 2
-const STORES = ['materials', 'marks', 'drills', 'meta', 'reviews', 'lookups'] as const
+const DB_VER = 3
+const STORES = ['materials', 'marks', 'drills', 'meta', 'reviews', 'lookups', 'snapshots'] as const
 
 let opening: Promise<IDBDatabase> | null = null
 
@@ -36,6 +36,10 @@ function open(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains('lookups')) {
         db.createObjectStore('lookups', { keyPath: 'key' })
+      }
+      if (!db.objectStoreNames.contains('snapshots')) {
+        const s = db.createObjectStore('snapshots', { keyPath: 'id' })
+        s.createIndex('at', 'at')
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -149,6 +153,38 @@ export const db = {
     return row ? (row.value as T) : undefined
   },
 
+  // ---- snapshots（自动备份，离线快照）----
+  async saveSnapshot(data: unknown): Promise<Snapshot> {
+    const at = Date.now()
+    const snap: Snapshot = { id: `snap-${at}`, at, data }
+    await putMany<Snapshot>('snapshots', [snap])
+    // 只保留最近 10 份
+    const existing = await all<Snapshot>('snapshots')
+    if (existing.length > 10) {
+      const drop = existing
+        .sort((a, b) => a.at - b.at)
+        .slice(0, existing.length - 10)
+        .map((s) => s.id)
+      const db = await open()
+      await new Promise<void>((resolve, reject) => {
+        const t = db.transaction('snapshots', 'readwrite')
+        const s = t.objectStore('snapshots')
+        for (const id of drop) s.delete(id)
+        t.oncomplete = () => resolve()
+        t.onerror = () => reject(t.error)
+        t.onabort = () => reject(t.error)
+      })
+    }
+    return snap
+  },
+  listSnapshots: () => all<Snapshot>('snapshots'),
+  async getSnapshot(id: string): Promise<Snapshot | undefined> {
+    return run<Snapshot | undefined>('snapshots', 'readonly', (s) => s.get(id))
+  },
+  async delSnapshot(id: string) {
+    return run('snapshots', 'readwrite', (s) => s.delete(id))
+  },
+
   // ---- backup ----
   async exportAll() {
     const [materials, marks, drills, meta, reviews, lookups] = await Promise.all([
@@ -177,8 +213,10 @@ export const db = {
     if (!raw || raw.app !== 'whitespace') throw new Error('不是「留白」的备份文件')
     if (mode === 'replace') {
       const db = await open()
+      // 只清数据 store，保留本地自动备份快照（snapshots 不属于用户数据）
+      const dataStores = STORES.filter((n) => n !== 'snapshots')
       await Promise.all(
-        STORES.map(
+        dataStores.map(
           (name) =>
             new Promise<void>((resolve, reject) => {
               const t = db.transaction(name, 'readwrite')

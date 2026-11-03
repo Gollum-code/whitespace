@@ -4,6 +4,7 @@ import { NoteEditor } from '../components/NoteEditor'
 import { Sentence } from '../components/Sentence'
 import { SpeakerButton } from '../components/SpeakerButton'
 import { lookupWord } from '../lib/ai'
+import { wordFamily } from '../lib/family'
 import { go } from '../lib/nav'
 import { isDue, isMastered } from '../lib/srs'
 import type { Mark, Material } from '../types'
@@ -16,6 +17,7 @@ interface Dict {
 export function WordPage({ lemma }: { lemma: string }) {
   const [query, setQuery] = useState(lemma)
   const [marks, setMarks] = useState<Mark[]>([])
+  const [allMarks, setAllMarks] = useState<Mark[]>([])
   const [mats, setMats] = useState<Map<string, Material>>(new Map())
   const [searched, setSearched] = useState(lemma)
   const [dict, setDict] = useState<Dict | null>(null)
@@ -30,9 +32,10 @@ export function WordPage({ lemma }: { lemma: string }) {
   useEffect(() => {
     let alive = true
     ;(async () => {
-      const ms = await db.allMaterials()
+      const [ms, mk] = await Promise.all([db.allMaterials(), db.getAllMarks()])
       if (!alive) return
       setMats(new Map(ms.map((m) => [m.id, m])))
+      setAllMarks(mk as Mark[])
     })()
     return () => {
       alive = false
@@ -84,6 +87,16 @@ export function WordPage({ lemma }: { lemma: string }) {
     return [...map.entries()]
   }, [marks])
 
+  const family = useMemo(() => {
+    if (!searched.trim()) return []
+    const known = new Set<string>()
+    for (const m of allMarks) {
+      known.add(m.text)
+      known.add(m.lemma)
+    }
+    return wordFamily(searched, known)
+  }, [searched, allMarks])
+
   const sampleSentence = (): string => {
     if (!marks.length) return ''
     const first = marks[0]
@@ -91,8 +104,8 @@ export function WordPage({ lemma }: { lemma: string }) {
     return mat?.cues[first.cueIndex]?.text ?? first.text
   }
 
-  const saveNote = async (mark: Mark, note: string) => {
-    const updated: Mark = { ...mark, note: note || undefined }
+  const saveNote = async (mark: Mark, note: string, example: string) => {
+    const updated: Mark = { ...mark, note: note || undefined, example: example || undefined }
     await db.putMark(updated)
     setMarks((prev) => prev.map((m) => (m.id === mark.id ? updated : m)))
   }
@@ -137,6 +150,20 @@ export function WordPage({ lemma }: { lemma: string }) {
             {dictFail && <span className="muted small">AI 词典暂时不可用。</span>}
             {dict && <span>{dict.meaningZh}</span>}
           </div>
+          {family.length > 0 && (
+            <div className="wd-family">
+              <span className="muted small">词族：</span>
+              {family.map((f) => (
+                <button
+                  key={f.word}
+                  className={`form-chip${f.word.toLowerCase() === searched.toLowerCase() ? ' self' : ''}`}
+                  onClick={() => go(`/word/${encodeURIComponent(f.word)}`)}
+                >
+                  {f.word}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -171,6 +198,7 @@ export function WordPage({ lemma }: { lemma: string }) {
                     </em>
                     {isMastered(m.card) && <em className="mastered">已掌握</em>}
                     {m.kind === 'phrase' && <em className="phrase-tag">短语</em>}
+                    {m.kind === 'sentence' && <em className="phrase-tag">整句</em>}
                     {mat?.kind === 'youtube' && mat.videoId && m.startSec != null && (
                       <a
                         className="link small"
@@ -182,7 +210,11 @@ export function WordPage({ lemma }: { lemma: string }) {
                       </a>
                     )}
                   </div>
-                  <NoteEditor note={m.note} onSave={(note) => saveNote(m, note)} />
+                  <NoteEditor
+                    note={m.note}
+                    example={m.example}
+                    onSave={(note, example) => saveNote(m, note, example)}
+                  />
                 </div>
               )
             })}
